@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+aiomysql>=0.3.2
+cryptography>=41.0
+playwright>=1.40
+psutil>=5.9

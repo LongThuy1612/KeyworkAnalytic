@@ -1,0 +1,28 @@
+# network_mode: host -> `localhost` MySQL in DATABASE_URL keeps working with the
+# existing grants, and the host's own Xvfb (:99, owned by pm2 gui-display) is
+# not touched because this container runs its own display (:101).
+services:
+  keyword:
+    build: .
+    container_name: keyworkanalytic
+    network_mode: host
+    restart: always
+    init: true
+    env_file: .env
+    shm_size: "1gb"
+    mem_limit: 3g
+    environment:
+      DISPLAY_NUM: "101"
+      VNC_PORT: "5911"
+      NOVNC_PORT: "6081"
+    volumes:
+      - ./data:/app/data           # Chrome profile (login), downloads, state.sqlite
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8101/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

@@ -48,6 +48,15 @@ _BREAK_MAX_MINUTES = 180
 # no real Keyword Planner interaction before failing. A short break here
 # lets the loop retry promptly instead of sitting idle for up to 3 hours
 # waiting out an infra outage that may already be over in minutes.
+# A session that found nothing to do (empty local queue -- e.g. the very first
+# session starting a few seconds before the feeder's first pull -- or no saved
+# login) must not be treated as a finished session, or it sleeps the full
+# 90-180 min throttle break. Confirmed live 2026-10-27: first session ran at
+# 04:10:27, the feeder queued 1000 jobs at 04:10:32, the loop slept 109 min.
+NO_WORK = -1
+NO_LOGIN = -2
+_IDLE_RETRY_S = 60
+_NO_LOGIN_RETRY_S = 300
 _ERROR_BREAK_MIN_MINUTES = 3
 _ERROR_BREAK_MAX_MINUTES = 8
 _BATCH_DELAY_MIN_S = 20
@@ -146,13 +155,13 @@ async def _run_session(state: KeywordFarmAutoState, stop_event: asyncio.Event, g
     batch up, saves results, and stops early on stop_event, a RAM emergency,
     or the session's own time budget running out."""
     if not browser.has_saved_login():
-        logger.warning("[keyword_farm_auto] No saved Google login for this profile -- skipping session (run scripts/run_keyword_farm.py --login first).")
-        return 0
+        logger.warning("[keyword_farm_auto] No saved Google login for this profile -- skipping session (POST /auth/start-login, then log in via noVNC).")
+        return NO_LOGIN
 
     await flush_outbox()
     domains = await db.get_next_domains(_DOMAINS_PER_SESSION_BATCH)  # local SQLite queue
     if not domains:
-        return 0
+        return NO_WORK
     unfinished = set(domains)  # claimed but not yet resolved; handed back on exit
 
     context = await browser.get_context()
@@ -287,6 +296,12 @@ async def run_keyword_farm_auto_loop(state: KeywordFarmAutoState, stop_event: as
             session_failed = False
             try:
                 looked_up = await _run_session(state, stop_event, guard, session_minutes)
+                if looked_up in (NO_WORK, NO_LOGIN):
+                    wait_s = _IDLE_RETRY_S if looked_up == NO_WORK else _NO_LOGIN_RETRY_S
+                    if looked_up == NO_WORK:
+                        logger.info("[keyword_farm_auto] Nothing queued yet -- checking again in %ds.", wait_s)
+                    await _wait_ticks(stop_event, wait_s)
+                    continue
                 state.sessionsRun += 1
                 logger.info("[keyword_farm_auto] Session done -- %d domain(s) looked up.", looked_up)
             except Exception as err:  # noqa: BLE001 -- one bad session must not kill the whole loop

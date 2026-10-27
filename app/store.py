@@ -1,13 +1,13 @@
 """Local SQLite state (WAL), same idea as topai-imageproxy's retry_queue.db.
 
-Two tables, both surviving restarts and MySQL outages:
+This file is the service's own storage, so the crawl DB is read and written as
+little as possible:
 
-  outbox    results waiting to be written to MySQL. The farm never blocks on,
-            or loses a lookup to, a MySQL hiccup: it appends here and a
-            flusher drains it whenever MySQL answers.
-  attempts  per-domain ledger of lookups that produced no row (Keyword Planner
-            had no data), so the same domain is not re-picked every session
-            until NO_DATA_RETRY_AFTER_DAYS has passed.
+  jobs    the work queue (see app/jobqueue.py) -- what is pending / running /
+          done / failed is answered here, never by asking MySQL.
+  outbox  results waiting to be written to MySQL in one batch. The farm never
+          blocks on, or loses a lookup to, a MySQL hiccup.
+  kv      small state: the feeder's keyset cursor and pull timers.
 """
 
 import json
@@ -18,7 +18,6 @@ import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.environ.get("STATE_DB_PATH", os.path.join(_ROOT, "data", "state.sqlite"))
-NO_DATA_RETRY_AFTER_DAYS = int(os.environ.get("NO_DATA_RETRY_AFTER_DAYS", "14"))
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
@@ -36,13 +35,11 @@ def _db() -> sqlite3.Connection:
             CREATE TABLE IF NOT EXISTS outbox (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 payload TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS attempts (
-                domain TEXT PRIMARY KEY,
-                last_attempt_at INTEGER NOT NULL,
-                misses INTEGER NOT NULL DEFAULT 1
+            CREATE TABLE IF NOT EXISTS kv (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
             """
         )
@@ -61,7 +58,7 @@ def outbox_add(params_list: list[list]) -> None:
         db.commit()
 
 
-def outbox_peek(limit: int = 50) -> list[tuple[int, list]]:
+def outbox_peek(limit: int = 200) -> list[tuple[int, list]]:
     with _lock:
         rows = _db().execute("SELECT id, payload FROM outbox ORDER BY id LIMIT ?", (limit,)).fetchall()
     return [(r[0], json.loads(r[1])) for r in rows]
@@ -81,40 +78,33 @@ def outbox_size() -> int:
         return _db().execute("SELECT COUNT(*) FROM outbox").fetchone()[0]
 
 
-def record_miss(domains: list[str]) -> None:
-    now = int(time.time())
+def outbox_oldest_age() -> float:
+    with _lock:
+        row = _db().execute("SELECT MIN(created_at) FROM outbox").fetchone()
+    return time.time() - row[0] if row and row[0] else 0.0
+
+
+def outbox_domains() -> set[str]:
+    """Domains whose result is still waiting to be written (payload[0])."""
+    with _lock:
+        rows = _db().execute("SELECT payload FROM outbox").fetchall()
+    return {json.loads(r[0])[0] for r in rows}
+
+
+def kv_get(key: str, default: str | None = None) -> str | None:
+    with _lock:
+        row = _db().execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def kv_set(key: str, value: str | None) -> None:
     with _lock:
         db = _db()
-        db.executemany(
-            "INSERT INTO attempts (domain, last_attempt_at) VALUES (?, ?) "
-            "ON CONFLICT(domain) DO UPDATE SET last_attempt_at = excluded.last_attempt_at, misses = misses + 1",
-            [(d, now) for d in domains],
-        )
-        db.commit()
-
-
-def clear_attempts(domains: list[str]) -> None:
-    with _lock:
-        db = _db()
-        db.executemany("DELETE FROM attempts WHERE domain = ?", [(d,) for d in domains])
-        db.commit()
-
-
-def recently_missed(domains: list[str]) -> set[str]:
-    if not domains:
-        return set()
-    cutoff = int(time.time()) - NO_DATA_RETRY_AFTER_DAYS * 86400
-    out: set[str] = set()
-    with _lock:
-        db = _db()
-        for i in range(0, len(domains), 500):
-            chunk = domains[i : i + 500]
-            marks = ",".join("?" * len(chunk))
-            out.update(
-                r[0]
-                for r in db.execute(
-                    f"SELECT domain FROM attempts WHERE last_attempt_at > ? AND domain IN ({marks})",
-                    [cutoff, *chunk],
-                )
+        if value is None:
+            db.execute("DELETE FROM kv WHERE key = ?", (key,))
+        else:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
             )
-    return out
+        db.commit()

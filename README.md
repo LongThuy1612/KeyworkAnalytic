@@ -6,20 +6,24 @@ risk accepted by the operator; session/batch throttling is unchanged from
 CrawlData).
 
 ```
-MySQL affiliate_programs ──candidates──▶ farm (Chrome + Keyword Planner UI)
-                                              │
-                                              ▼
-                         SQLite outbox (data/state.sqlite)
-                                              │ flush, retried
-                                              ▼
-                              MySQL domain_keyword_volume
+POST /keywords ─┐                            ┌──▶ farm (Chrome + Keyword Planner UI)
+                ├─▶ SQLite job queue ─claim─▶┘            │
+MySQL feeder ───┘   (pending→running→done|failed)         ▼
+ affiliate_programs                          SQLite outbox ──batch flush──▶ MySQL domain_keyword_volume
 ```
 
-* **Outbox**: every parsed result is written to local SQLite first and drained
-  to MySQL; a MySQL outage delays writes but never loses a lookup.
-* **Miss ledger**: a domain Keyword Planner had no data for is not re-picked for
-  `NO_DATA_RETRY_AFTER_DAYS` (default 14). CrawlData re-picked it every session.
-* Tables are owned by BEWeb's Prisma migrations; this service never runs DDL.
+**Crawl-DB access is kept to a minimum; this service's own state lives in
+`data/state.sqlite`:**
+
+| what | where it lives | MySQL traffic |
+|---|---|---|
+| work queue (pending / running / done / failed, leases, priority) | SQLite `jobs` | none |
+| which domains are done or have no Keyword Planner data | SQLite `jobs` (re-queued after 14 days) | none |
+| candidate discovery | feeder: keyset-paged (`crawled_at` cursor kept in SQLite `kv`), 1000-row pages, ≤ 1 pull / 10 min and only while < 200 jobs are pending; backlog exhausted → looks again after 1 h | one anti-join page per pull |
+| results | SQLite `outbox` → one multi-row `INSERT … ON DUPLICATE KEY UPDATE` in one transaction when 20 rows are waiting or the oldest is 5 min old | ~ one write per few minutes |
+
+A MySQL outage therefore only delays writes; nothing is lost, and the farm keeps
+working from its local queue.
 
 ## Run
 
@@ -43,8 +47,9 @@ The profile lives in `./data/profile`, so it survives rebuilds. Copy the old
 
 ## Endpoints (port 8101)
 
-`GET /health` · `GET /status` (login, loop state, outbox size) · `POST /start` ·
-`POST /stop` · `POST /auth/start-login` · `POST /auth/stop-login`
+`POST /keywords` (queue domains now, optional priority) · `GET /keywords/jobs` · `GET /health` ·
+`GET /status` (login, loop state, queue, outbox) · `POST /start` · `POST /stop` ·
+`POST /auth/start-login` · `POST /auth/stop-login`
 
 ## Notes
 

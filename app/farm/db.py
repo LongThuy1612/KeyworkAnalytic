@@ -35,44 +35,48 @@ suggestions. monthlyTrend holds the CSV's 12 "Searches: <Mon Year>" columns
 as {"2025-08": 2240000, ...}.
 """
 
-from app.mysql import execute, fetch_all
+from datetime import datetime
+
+from app import jobqueue
+from app.mysql import executemany, fetch_all
 
 TABLE = "domain_keyword_volume"
+TOOL = "keyword"
 
 # Re-check a domain this many days after its last lookup -- keeps the farm
 # from re-querying the same already-covered domain forever once the initial
-# backlog is done, while still refreshing stale volume numbers periodically
-# (Google's own trend data moves month to month, same rationale as
-# affiliate_programs.staleDays elsewhere in this codebase).
+# backlog is done, while still refreshing stale volume numbers periodically.
 _RECHECK_AFTER_DAYS = 30
 
 
-async def get_next_domains(limit: int) -> list[str]:
-    """Domains from affiliate_programs that either have no seed-keyword row
-    yet in domain_keyword_volume, or whose seed row is older than
-    _RECHECK_AFTER_DAYS. Checks is_seed=1 specifically (not any row) so a
-    domain whose seed lookup succeeded but returned zero keyword ideas isn't
-    mistaken for "never looked up." Ordered by ap.crawled_at DESC (2026-08-27,
-    operator's explicit call: keep this consistent with the similarweb services' own get_next_domains(), both of
-    which already prioritize the most recently (re)crawled domains) --
-    previously affiliate_score DESC (highest-signal domains first), changed
-    since a domain just confirmed by Tier 1-3 is the one most likely to
-    still be actionable/relevant right now, not necessarily whichever domain
-    happens to have accumulated the highest score over its whole history."""
+async def fetch_fresh(limit: int, cursor: str | None) -> list[tuple[str, str]]:
+    """One page of candidate domains for the feeder: no seed-keyword row yet
+    (is_seed=1 specifically, so a domain whose lookup returned zero ideas is
+    not mistaken for "never looked up"), or a seed row older than
+    _RECHECK_AFTER_DAYS. Newest-crawled first, continuing at `cursor` (a
+    crawled_at value, inclusive so boundary ties are not skipped). The feeder
+    calls this a few times an hour at most -- everything else is answered by
+    the local SQLite queue. Returns (domain, crawled_at)."""
+    where = "AND ap.crawled_at <= %s" if cursor else ""
     rows = await fetch_all(
         f"""
-        SELECT ap.domain
+        SELECT ap.domain, MAX(ap.crawled_at) AS crawled_at
         FROM affiliate_programs ap
         LEFT JOIN {TABLE} dkv ON dkv.domain = ap.domain AND dkv.is_seed = 1
-        WHERE dkv.domain IS NULL
-           OR dkv.fetched_at < DATE_SUB(NOW(), INTERVAL {_RECHECK_AFTER_DAYS} DAY)
+        WHERE (dkv.domain IS NULL
+               OR dkv.fetched_at < DATE_SUB(NOW(), INTERVAL {_RECHECK_AFTER_DAYS} DAY)) {where}
         GROUP BY ap.domain
-        ORDER BY ap.crawled_at DESC
+        ORDER BY crawled_at DESC
         LIMIT %s
         """,
-        (limit,),
+        ((cursor, limit) if cursor else (limit,)),
     )
-    return [r["domain"] for r in rows]
+    return [(r["domain"], str(r["crawled_at"])) for r in rows]
+
+
+async def get_next_domains(limit: int) -> list[str]:
+    """What the farm loop calls: work comes from the local SQLite queue."""
+    return jobqueue.claim(TOOL, limit)
 
 
 def build_params(keyword_to_domain: dict[str, str], rows: list[dict]) -> list[list]:
@@ -81,8 +85,11 @@ def build_params(keyword_to_domain: dict[str, str], rows: list[dict]) -> list[li
     (case-insensitive) because a batch shares one CSV with no per-row domain
     marker; a row whose keyword is not in the mapping is skipped rather than
     guessed at. "Keyword ideas" rows were already dropped during parsing
-    (operator's explicit instruction: only seed keywords are kept)."""
+    (operator's explicit instruction: only seed keywords are kept). The last
+    element is the lookup time (ISO) so a delayed flush keeps the real
+    fetched_at."""
     lookup = {k.lower(): v for k, v in keyword_to_domain.items()}
+    at = datetime.now().isoformat()
     out: list[list] = []
     for row in rows:
         domain = lookup.get(row["keyword"].strip().lower())
@@ -101,17 +108,20 @@ def build_params(keyword_to_domain: dict[str, str], rows: list[dict]) -> list[li
                 row["low_top_of_page_bid"],
                 row["high_top_of_page_bid"],
                 row["monthly_trend_json"],
+                at,
             ]
         )
     return out
 
 
+# Only %s placeholders, so the driver turns a whole batch into ONE multi-row
+# INSERT (a NOW() in VALUES would force it back to one statement per row).
 _UPSERT_SQL = f"""
     INSERT INTO {TABLE}
         (domain, keyword, is_seed, avg_monthly_searches, three_month_change,
          yoy_change, competition, competition_index, low_top_of_page_bid,
          high_top_of_page_bid, monthly_trend, fetched_at)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
         is_seed = VALUES(is_seed),
         avg_monthly_searches = VALUES(avg_monthly_searches),
@@ -122,11 +132,12 @@ _UPSERT_SQL = f"""
         low_top_of_page_bid = VALUES(low_top_of_page_bid),
         high_top_of_page_bid = VALUES(high_top_of_page_bid),
         monthly_trend = VALUES(monthly_trend),
-        fetched_at = NOW()
+        fetched_at = VALUES(fetched_at)
 """
 
 
-async def upsert_params(params: list) -> None:
-    """Idempotent: a re-run only refreshes fetched_at and the numbers on the
-    (domain, keyword) unique key, so a retried outbox row cannot duplicate."""
-    await execute(_UPSERT_SQL, tuple(params))
+async def upsert_many(rows: list[list]) -> int:
+    """Idempotent (unique key domain+keyword): a retried batch only refreshes
+    the numbers. One connection, one transaction for the whole batch."""
+    params = [tuple(r[:-1]) + (datetime.fromisoformat(r[-1]),) for r in rows]
+    return await executemany(_UPSERT_SQL, params)

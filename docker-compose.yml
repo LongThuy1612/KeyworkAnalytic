@@ -16,7 +16,8 @@ services:
       VNC_PORT: "5911"
       NOVNC_PORT: "6081"
     volumes:
-      - ./data:/app/data           # Chrome profile (login), downloads, state.sqlite
+      - ./data:/app/data           # Chrome profile (login), downloads, state.sqlite (queue + outbox)
+      - ./logs:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8101/health"]
       interval: 60s

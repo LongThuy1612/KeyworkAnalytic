@@ -28,7 +28,7 @@ import asyncio
 import logging
 import random
 
-from app import store
+from app import config, jobqueue, store
 from app.farm import browser, db
 from app.farm.keywordize import domain_to_keyword
 from app.farm.scrape import KeywordPlannerAccountError, ensure_discover_page, lookup_keywords
@@ -97,32 +97,25 @@ class KeywordFarmAutoState:
         }
 
 
-async def flush_outbox(limit: int = 100) -> int:
-    """Drains results waiting in the local SQLite outbox into MySQL. Stops at
-    the first failure (almost always MySQL being unreachable) and leaves the
-    rest queued -- the farm itself never blocks on or loses a lookup to a DB
-    hiccup. Upserts are idempotent so a row retried after a half-failed flush
-    is harmless."""
-    sent = 0
-    for _ in range(max(1, limit // 50)):
-        batch = store.outbox_peek(50)
-        if not batch:
-            break
-        done: list[int] = []
-        failed = False
-        for row_id, params in batch:
-            try:
-                await db.upsert_params(params)
-                done.append(row_id)
-            except Exception as err:  # noqa: BLE001
-                logger.warning("[loop] outbox flush stopped, MySQL not accepting writes: %s", err)
-                failed = True
-                break
-        store.outbox_done(done)
-        sent += len(done)
-        if failed:
-            break
-    return sent
+async def flush_outbox() -> int:
+    """Drains the outbox into MySQL in ONE transaction per call (up to
+    FLUSH_BATCH rows). Never raises -- on failure (almost always MySQL being
+    unreachable) the rows stay queued locally and the next flush retries."""
+    batch = store.outbox_peek(config.FLUSH_BATCH)
+    if not batch:
+        return 0
+    try:
+        await db.upsert_many([params for _, params in batch])
+    except Exception as err:  # noqa: BLE001
+        logger.warning("[loop] outbox flush failed, %d row(s) stay queued: %s", len(batch), err)
+        return 0
+    store.outbox_done([i for i, _ in batch])
+    return len(batch)
+
+
+async def maybe_flush() -> None:
+    if store.outbox_size() >= config.FLUSH_MIN_ROWS or store.outbox_oldest_age() >= config.FLUSH_MAX_AGE_S:
+        await flush_outbox()
 
 
 async def _close_browser_best_effort(reason: str) -> None:
@@ -157,13 +150,10 @@ async def _run_session(state: KeywordFarmAutoState, stop_event: asyncio.Event, g
         return 0
 
     await flush_outbox()
-    domains = await db.get_next_domains(_DOMAINS_PER_SESSION_BATCH)
-    skip = store.recently_missed(domains)
-    if skip:
-        logger.info("[loop] skipping %d domain(s) with no Keyword Planner data in the last %d days", len(skip), store.NO_DATA_RETRY_AFTER_DAYS)
-        domains = [d for d in domains if d not in skip]
+    domains = await db.get_next_domains(_DOMAINS_PER_SESSION_BATCH)  # local SQLite queue
     if not domains:
         return 0
+    unfinished = set(domains)  # claimed but not yet resolved; handed back on exit
 
     context = await browser.get_context()
     page = await context.new_page()
@@ -176,7 +166,11 @@ async def _run_session(state: KeywordFarmAutoState, stop_event: asyncio.Event, g
     current_target = random.randint(_KEYWORDS_PER_BATCH_MIN, _KEYWORDS_PER_BATCH_MAX)
     for domain in domains:
         keyword = domain_to_keyword(domain)
-        if not keyword or keyword.lower() in current:
+        if not keyword:
+            jobqueue.finish(domain, False, error="no keyword derivable from domain")
+            unfinished.discard(domain)
+            continue
+        if keyword.lower() in current:
             continue
         current[keyword.lower()] = domain
         if len(current) >= current_target:
@@ -226,13 +220,14 @@ async def _run_session(state: KeywordFarmAutoState, stop_event: asyncio.Event, g
 
             params = db.build_params(keyword_to_domain, rows) if rows else []
             found = {p[0] for p in params}
-            missed = [d for d in keyword_to_domain.values() if d not in found]
-            if missed:
-                store.record_miss(missed)
+            for d in keyword_to_domain.values():
+                # A domain with no row = Keyword Planner has no data for it:
+                # closed as failed locally, re-queued only after REQUEUE_AFTER_S.
+                jobqueue.finish(d, d in found, error=None if d in found else "no Keyword Planner data")
+                unfinished.discard(d)
             if params:
-                store.clear_attempts(list(found))
                 store.outbox_add(params)
-                await flush_outbox()
+                await maybe_flush()
                 looked_up += len(rows)
                 state.domainsLookedUp += len(rows)
                 for row in rows:
@@ -244,6 +239,7 @@ async def _run_session(state: KeywordFarmAutoState, stop_event: asyncio.Event, g
 
             await _wait_ticks(stop_event, random.uniform(_BATCH_DELAY_MIN_S, _BATCH_DELAY_MAX_S))
     finally:
+        jobqueue.release(list(unfinished))  # untouched domains go back to the queue
         try:
             await page.close()
         except Exception:  # noqa: BLE001

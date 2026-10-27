@@ -105,6 +105,37 @@ async def _with_retry(sql: str, params: tuple, fetch: bool):
             await asyncio.sleep(_RETRY_BACKOFF_S * attempt)
 
 
+async def _run_many(sql: str, rows: list) -> int:
+    pool, conn = await _acquire()
+    try:
+        await conn.begin()
+        async with conn.cursor() as cur:
+            await asyncio.wait_for(cur.executemany(sql, rows), timeout=_QUERY_TIMEOUT_S * 3)
+        await conn.commit()
+        return len(rows)
+    except BaseException:
+        conn.close()  # never hand back a connection stuck inside a transaction
+        raise
+    finally:
+        pool.release(conn)
+
+
+async def executemany(sql: str, rows: list) -> int:
+    """One connection, one transaction for the whole batch -- the point of the
+    local outbox is to touch the crawl DB about once a minute, not once per row."""
+    if not rows:
+        return 0
+    attempt = 0
+    while True:
+        try:
+            return await _run_many(sql, rows)
+        except Exception as err:  # noqa: BLE001
+            if attempt >= _RETRIES or not is_connectivity_error(err):
+                raise
+            attempt += 1
+            await asyncio.sleep(_RETRY_BACKOFF_S * attempt)
+
+
 async def fetch_all(sql: str, params: tuple = ()) -> list[dict]:
     return list(await _with_retry(sql, params, True))
 

@@ -10,6 +10,7 @@ checked within ADS_RECHECK_DAYS are skipped unless --force. Google 429/403 -> gr
 import asyncio
 import json
 import os
+import random
 import sys
 import time
 
@@ -83,7 +84,7 @@ async def main() -> None:
                 except RateLimited as err:
                     stats["rate_limited"] += 1
                     streak += 1
-                    pause_until = time.time() + min(900, 60 * streak)
+                    pause_until = time.time() + min(1800, 600 * streak)
                     print(f"rate limited ({err}); pausing {int(pause_until - time.time())}s", flush=True)
                     continue
                 except TransparencyError:
@@ -91,7 +92,7 @@ async def main() -> None:
                     return
                 streak = 0
                 cache[root] = res
-                await asyncio.sleep(config.ADS_DELAY_S)
+                await asyncio.sleep(config.ADS_DELAY_S * random.uniform(0.8, 1.4))
                 break
         pending.append(db.to_params(domain, res))
         stats["checked"] += 1

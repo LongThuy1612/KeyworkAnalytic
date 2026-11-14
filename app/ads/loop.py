@@ -11,6 +11,7 @@
 
 import asyncio
 import logging
+import random
 import time
 
 import httpx
@@ -127,7 +128,7 @@ async def run_ads_loop(state: AdsState, stop: asyncio.Event) -> None:
                             except RateLimited as err:
                                 state.rateLimited += 1
                                 streak += 1
-                                state.pausedUntil = time.time() + min(900, 60 * streak)
+                                state.pausedUntil = time.time() + min(1800, 600 * streak)
                                 state.lastError = f"rate limited ({err}); pausing {int(state.pausedUntil - time.time())}s"
                                 log.warning("[ads] %s", state.lastError)
                                 return                      # not recorded: the domain is picked up again later
@@ -137,7 +138,7 @@ async def run_ads_loop(state: AdsState, stop: asyncio.Event) -> None:
                                 return
                             streak = 0
                             cache[root] = res
-                            await asyncio.sleep(config.ADS_DELAY_S)
+                            await asyncio.sleep(config.ADS_DELAY_S * random.uniform(0.8, 1.4))
                     store.ads_outbox_add([db.to_params(domain, res)])
                     state.checked += 1
                     state.withAds += int(res["has_ads"])

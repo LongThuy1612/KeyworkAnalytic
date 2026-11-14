@@ -72,7 +72,7 @@ A third party paying for traffic to a merchant (an affiliate, a partner agency, 
 deciding whether a programme is worth promoting.
 
 * Plain HTTP to the public RPC the Transparency Center page itself uses; no browser, no Google account, no proxy. Up to
-  `ADS_MAX_PAGES` pages of 40 creatives per domain, ~1 request/s per worker, 3 workers.
+  `ADS_MAX_PAGES` pages of 40 creatives per domain, about 1 request/s in total (Google answers faster traffic with a redirect to google.com/sorry; the loop then pauses 10-30 min).
 * Advertisers are grouped by name (one company often has several accounts). The owner is the advertiser whose name contains the
   domain's brand (a 3-letter brand needs a whole-word match), else the one that clearly dominates (>= 60% of the sampled
   ads). If neither can be told, `has_other_advertisers` stays 0 rather than guessing (`owner_match = 0`).

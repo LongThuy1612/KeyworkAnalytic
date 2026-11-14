@@ -38,8 +38,8 @@ FLUSH_BATCH = int(os.getenv("FLUSH_BATCH", 200))
 
 # --- advertiser signal (app/ads): Google Ads Transparency Center over plain HTTP ---
 ADS_ENABLED = os.getenv("ADS_ENABLED", "true").lower() == "true"
-ADS_CONCURRENCY = int(os.getenv("ADS_CONCURRENCY", 3))
-ADS_DELAY_S = float(os.getenv("ADS_DELAY_S", 0.7))          # pause between requests of one worker
+ADS_CONCURRENCY = int(os.getenv("ADS_CONCURRENCY", 1))
+ADS_DELAY_S = float(os.getenv("ADS_DELAY_S", 1.2))          # pause between requests of one worker (Google blocks ~4 req/s)
 ADS_MAX_PAGES = int(os.getenv("ADS_MAX_PAGES", 3))          # 40 creatives per page
 ADS_RECHECK_DAYS = int(os.getenv("ADS_RECHECK_DAYS", 90))
 ADS_MIN_SCORE = int(os.getenv("ADS_MIN_SCORE", 0))          # only programmes scoring at least this (0 = all)

@@ -15,6 +15,7 @@ web page itself sends.
 
 import asyncio
 import json
+import random
 import re
 from urllib.parse import urlencode
 
@@ -63,8 +64,9 @@ async def _search(client: httpx.AsyncClient, domain: str, token: str | None = No
         r = await client.post(URL, headers=HEADERS, content=urlencode({"f.req": json.dumps(req, separators=(",", ":"))}), timeout=30)
     except httpx.HTTPError as e:
         raise TransparencyError(f"transport: {type(e).__name__}") from e
-    if r.status_code in (403, 429):
-        raise RateLimited(str(r.status_code))
+    if r.status_code in (403, 429) or 300 <= r.status_code < 400:
+        # Google's rate limit is a redirect to google.com/sorry (a CAPTCHA page), not a 429. It lifts after a while.
+        raise RateLimited(f"{r.status_code} {r.headers.get('location', '')[:60]}".strip())
     if r.status_code != 200:
         raise TransparencyError(f"http {r.status_code}")
     if len(r.content) <= 2:
@@ -141,5 +143,5 @@ async def check_domain(client: httpx.AsyncClient, domain: str, max_pages: int = 
         token = data.get("2")
         if len(got) < PAGE_SIZE or not token:
             break
-        await asyncio.sleep(delay_s)
+        await asyncio.sleep(delay_s * random.uniform(0.8, 1.4))
     return analyze(d, creatives, est, pages)

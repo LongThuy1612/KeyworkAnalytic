@@ -83,3 +83,14 @@ deciding whether a programme is worth promoting.
   of 100, and pauses with a growing back-off when Google answers 429/403.
 * `POST /ads/domains {"domains": [...]}` puts domains first in line; `GET /ads/status` shows progress.
 * `python scripts/ads_backfill.py programs.json` checks an explicit list without the service.
+
+## Only the clean dataset is looked up
+
+Keyword Planner and Transparency lookups are scarce, so the automatic feeders (which walk every crawled domain) are **off by
+default** (`FEED_AUTO=false`, `ADS_AUTO_FEED=false`). Hand in the domains worth the quota instead:
+
+```bash
+python scripts/queue_clean.py /path/to/clean_domains.txt --keywords http://localhost:8101 --ads http://localhost:8101
+```
+
+(`/keywords` queues the Keyword Planner jobs, `/ads/domains` the advertiser checks; both accept a list and run it first.)

@@ -18,6 +18,11 @@ JOB_MAX_ATTEMPTS = int(os.getenv("JOB_MAX_ATTEMPTS", 3))
 # Crawl-DB read budget (see app/feeder.py). The feeder tick itself is local
 # (SQLite only); MySQL is queried only when a pull is due: the tool's queue is
 # under FEED_LOW_WATER AND FEED_MIN_INTERVAL_S has passed since its last pull.
+# Automatic candidate feeding from affiliate_programs (every crawled domain) is OFF by default: Keyword Planner and
+# Transparency lookups are scarce, so they run only for the domains handed in through POST /keywords and /ads/domains
+# (the clean dataset). Set FEED_AUTO=true / ADS_AUTO_FEED=true to bring the old behaviour back.
+FEED_AUTO = os.getenv("FEED_AUTO", "false").lower() == "true"
+ADS_AUTO_FEED = os.getenv("ADS_AUTO_FEED", "false").lower() == "true"
 FEED_LOW_WATER = int(os.getenv("FEED_LOW_WATER", 200))
 FEED_BATCH = int(os.getenv("FEED_BATCH", 1000))
 FEED_INTERVAL_S = int(os.getenv("FEED_INTERVAL_S", 30))

@@ -68,6 +68,8 @@ async def _next_page(stop: asyncio.Event) -> list[str]:
     prio = store.ads_prio_take(_CHUNK * 5)
     if prio:
         return prio
+    if not config.ADS_AUTO_FEED:
+        return []                                      # only the explicit list (POST /ads/domains)
     now = time.time()
     if now < float(store.kv_get("ads_next_pull", "0") or 0):
         return []

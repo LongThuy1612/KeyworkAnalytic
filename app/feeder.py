@@ -57,7 +57,7 @@ async def run_forever(stop: asyncio.Event) -> None:
             if reclaimed:
                 log.info("returned %d expired job lease(s) to the queue", reclaimed)
             now = time.time()
-            if jobqueue.pending_count(TOOL) < config.FEED_LOW_WATER and now >= _kv_float("next_pull"):
+            if config.FEED_AUTO and jobqueue.pending_count(TOOL) < config.FEED_LOW_WATER and now >= _kv_float("next_pull"):
                 added = await pull_once(now)
                 log.info("pulled a page from MySQL, %d new job(s) queued", added)
         except Exception as err:  # noqa: BLE001 -- MySQL hiccup: retried next tick (next_pull not advanced)

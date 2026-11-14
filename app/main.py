@@ -29,12 +29,14 @@ from app import logging_setup
 logging_setup.install()
 
 from app import config, feeder, jobqueue, store  # noqa: E402
+from app.ads import loop as ads_loop  # noqa: E402
 from app.farm import browser  # noqa: E402
 from app.loop import KeywordFarmAutoState, flush_outbox, run_keyword_farm_auto_loop  # noqa: E402
 from app.mysql import close_pool  # noqa: E402
 
 log = logging.getLogger("service")
 state = KeywordFarmAutoState()
+ads_state = ads_loop.AdsState()
 _task: asyncio.Task | None = None
 _stop_event: asyncio.Event | None = None
 
@@ -89,10 +91,15 @@ async def lifespan(_: FastAPI):
     feed = asyncio.create_task(feeder.run_forever(feed_stop))
     flusher = asyncio.create_task(_outbox_flusher(flush_stop))
     cleanup = asyncio.create_task(logging_setup.log_cleanup_task())
+    ads_stop = asyncio.Event()
+    ads_task = asyncio.create_task(ads_loop.run_ads_loop(ads_state, ads_stop)) if config.ADS_ENABLED else None
     yield
     cleanup.cancel()
     feed_stop.set()
     flush_stop.set()
+    ads_stop.set()
+    if ads_task:
+        await asyncio.gather(ads_task, return_exceptions=True)
     await _stop()
     await asyncio.gather(feed, flusher, return_exceptions=True)
     await flush_outbox()
@@ -129,6 +136,21 @@ async def status():
         "outboxPending": store.outbox_size(),
         **state.snapshot(),
     }
+
+
+@app.get("/ads/status", summary="Advertiser-signal worker (Google Ads Transparency Center)")
+async def ads_status():
+    return {"enabled": config.ADS_ENABLED, **ads_state.snapshot()}
+
+
+class AdsDomainsRequest(BaseModel):
+    domains: list[str] = Field(..., min_length=1, max_length=20000)
+
+
+@app.post("/ads/domains", summary="Check these domains first (before the automatic candidate pages)")
+async def ads_domains(body: AdsDomainsRequest):
+    domains = sorted({d.strip().lower() for d in body.domains if d.strip()})
+    return {"requested": len(domains), "queued": store.ads_prio_add(domains)}
 
 
 @app.post("/keywords", summary="Queue domains for a Keyword Planner lookup")

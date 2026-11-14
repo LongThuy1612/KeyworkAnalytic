@@ -35,6 +35,8 @@ suggestions. monthlyTrend holds the CSV's 12 "Searches: <Mon Year>" columns
 as {"2025-08": 2240000, ...}.
 """
 
+import logging
+import os
 from datetime import datetime
 
 from app import jobqueue
@@ -46,7 +48,10 @@ TOOL = "keyword"
 # Re-check a domain this many days after its last lookup -- keeps the farm
 # from re-querying the same already-covered domain forever once the initial
 # backlog is done, while still refreshing stale volume numbers periodically.
-_RECHECK_AFTER_DAYS = 30
+_RECHECK_AFTER_DAYS = int(os.getenv("KEYWORD_RECHECK_DAYS", "30"))
+
+log = logging.getLogger("keyword_db")
+HISTORY_TABLE = "domain_keyword_volume_history"   # see sql/001_domain_keyword_volume_history.sql
 
 
 async def fetch_fresh(limit: int, cursor: str | None) -> list[tuple[str, str]]:
@@ -136,8 +141,24 @@ _UPSERT_SQL = f"""
 """
 
 
+_HISTORY_SQL = f"""
+    INSERT IGNORE INTO {HISTORY_TABLE}
+        (domain, keyword, fetched_at, avg_monthly_searches, three_month_change, yoy_change, competition,
+         competition_index, low_top_of_page_bid, high_top_of_page_bid, monthly_trend)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
 async def upsert_many(rows: list[list]) -> int:
-    """Idempotent (unique key domain+keyword): a retried batch only refreshes
-    the numbers. One connection, one transaction for the whole batch."""
+    """Latest numbers: idempotent (unique key domain+keyword), one transaction for the whole batch. Then one history row
+    per lookup (unique on domain+keyword+fetched_at, so a retried flush cannot duplicate it) so a domain checked again
+    later shows a trend. The history write is best-effort: if its table is not there yet the main write still stands."""
     params = [tuple(r[:-1]) + (datetime.fromisoformat(r[-1]),) for r in rows]
-    return await executemany(_UPSERT_SQL, params)
+    n = await executemany(_UPSERT_SQL, params)
+    try:
+        # r = [domain, keyword, is_seed, avg, 3m, yoy, comp, comp_idx, low, high, trend, at]
+        hist = [(r[0], r[1], datetime.fromisoformat(r[-1]), r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]) for r in rows]
+        await executemany(_HISTORY_SQL, hist)
+    except Exception as err:  # noqa: BLE001
+        log.warning("history write skipped (%d row(s)): %s", len(rows), err)
+    return n

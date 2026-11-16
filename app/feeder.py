@@ -19,7 +19,7 @@ import asyncio
 import logging
 import time
 
-from app import config, jobqueue, store
+from app import config, jobqueue, sitedb, store
 from app.farm import db
 
 log = logging.getLogger("feeder")
@@ -30,7 +30,26 @@ def _kv_float(key: str) -> float:
     return float(store.kv_get(key, "0") or 0)
 
 
+async def pull_once_site(now: float) -> int:
+    """The programmes published on the website, page by page (alphabetical keyset cursor kept in SQLite). One cheap
+    IN query against MySQL drops those that were looked up recently; nothing else touches the crawl DB."""
+    cursor = store.kv_get("site_cursor")
+    page = await sitedb.fetch_domains(config.FEED_BATCH, cursor)
+    skip = store.outbox_domains()
+    todo = [d for d in await db.fetch_uncovered(page) if d not in skip]
+    added = jobqueue.enqueue(todo, [TOOL], source="site") if todo else 0
+    if len(page) < config.FEED_BATCH:
+        store.kv_set("site_cursor", None)
+        store.kv_set("next_pull", str(now + config.FEED_EXHAUSTED_WAIT_S))  # reached the end: look again later
+    else:
+        store.kv_set("site_cursor", page[-1])
+        store.kv_set("next_pull", str(now + config.FEED_MIN_INTERVAL_S))
+    return added
+
+
 async def pull_once(now: float) -> int:
+    if sitedb.enabled():
+        return await pull_once_site(now)
     cursor = store.kv_get("cursor")
     if cursor and now - _kv_float("cursor_at") > config.FEED_CURSOR_RESET_S:
         cursor = None  # restart from the head
@@ -59,7 +78,7 @@ async def run_forever(stop: asyncio.Event) -> None:
             now = time.time()
             if config.FEED_AUTO and jobqueue.pending_count(TOOL) < config.FEED_LOW_WATER and now >= _kv_float("next_pull"):
                 added = await pull_once(now)
-                log.info("pulled a page from MySQL, %d new job(s) queued", added)
+                log.info("pulled a page of %s domains, %d new job(s) queued", "site" if sitedb.enabled() else "MySQL", added)
         except Exception as err:  # noqa: BLE001 -- MySQL hiccup: retried next tick (next_pull not advanced)
             log.warning("feeder tick failed: %s", err)
         try:

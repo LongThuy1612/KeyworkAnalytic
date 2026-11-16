@@ -36,6 +36,20 @@ async def fetch_candidates(limit: int, cursor: str | None) -> list[tuple[str, st
     return [(r["domain"], str(r["crawled_at"])) for r in rows]
 
 
+async def fetch_uncovered(domains: list[str]) -> list[str]:
+    """Of `domains`, those with no signal yet or one older than ADS_RECHECK_DAYS. One IN query per page."""
+    if not domains:
+        return []
+    marks = ",".join(["%s"] * len(domains))
+    rows = await fetch_all(
+        f"SELECT domain FROM {TABLE} WHERE checked_at >= DATE_SUB(NOW(), INTERVAL {int(config.ADS_RECHECK_DAYS)} DAY) "
+        f"AND domain IN ({marks})",
+        tuple(domains),
+    )
+    covered = {r["domain"] for r in rows}
+    return [d for d in domains if d not in covered]
+
+
 def to_params(domain: str, res: dict, at: datetime | None = None) -> list:
     return [
         domain,

@@ -16,7 +16,7 @@ import time
 
 import httpx
 
-from app import config, store
+from app import config, sitedb, store
 from app.ads import db
 from app.ads.transparency import RateLimited, TransparencyError, check_domain, registrable
 
@@ -73,6 +73,18 @@ async def _next_page(stop: asyncio.Event) -> list[str]:
     now = time.time()
     if now < float(store.kv_get("ads_next_pull", "0") or 0):
         return []
+    if sitedb.enabled():
+        site_cursor = store.kv_get("ads_site_cursor")
+        page = await sitedb.fetch_domains(config.ADS_PULL_BATCH, site_cursor)
+        skip = store.ads_outbox_domains()
+        domains = [d for d in await db.fetch_uncovered(page) if d not in skip]
+        if len(page) < config.ADS_PULL_BATCH:
+            store.kv_set("ads_site_cursor", None)
+            store.kv_set("ads_next_pull", str(now + 3600))
+        else:
+            store.kv_set("ads_site_cursor", page[-1])
+        log.info("[ads] pulled %d site domain(s) still to check", len(domains))
+        return domains
     cursor = store.kv_get("ads_cursor")
     if cursor and now - float(store.kv_get("ads_cursor_at", "0") or 0) > 86400:
         cursor = None                                  # restart from the head daily to catch new domains

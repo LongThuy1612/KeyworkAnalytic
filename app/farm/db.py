@@ -79,6 +79,20 @@ async def fetch_fresh(limit: int, cursor: str | None) -> list[tuple[str, str]]:
     return [(r["domain"], str(r["crawled_at"])) for r in rows]
 
 
+async def fetch_uncovered(domains: list[str]) -> list[str]:
+    """Of `domains`, those with no seed-keyword row yet or one older than the recheck window. One IN query per page."""
+    if not domains:
+        return []
+    marks = ",".join(["%s"] * len(domains))
+    rows = await fetch_all(
+        f"SELECT DISTINCT domain FROM {TABLE} WHERE is_seed = 1 AND fetched_at >= DATE_SUB(NOW(), INTERVAL {_RECHECK_AFTER_DAYS} DAY) "
+        f"AND domain IN ({marks})",
+        tuple(domains),
+    )
+    covered = {r["domain"] for r in rows}
+    return [d for d in domains if d not in covered]
+
+
 async def get_next_domains(limit: int) -> list[str]:
     """What the farm loop calls: work comes from the local SQLite queue."""
     return jobqueue.claim(TOOL, limit)

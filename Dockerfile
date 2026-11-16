@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    dumb-init procps curl ca-certificates xvfb x11vnc fluxbox novnc websockify \
+    dumb-init procps curl ca-certificates xvfb x11vnc fluxbox novnc websockify libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

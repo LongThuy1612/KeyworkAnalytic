@@ -1,13 +1,13 @@
 """The website's own database (PostgreSQL): where the domains come from and where the results go.
 
 The site's table "Program" is the clean dataset -- only programmes that passed every check are in it -- so the farm
-follows it directly instead of being handed a list. The results land in the table "KeywordSignal" of the same
-database (one row per domain), which the website reads to show the brand-search demand on a programme page.
+follows it directly instead of being handed a list. The results land in the table "Keyword" of the same
+database (one row per domain AND keyword: the brand keyword and its related searches), which the website reads.
 
     SITE_DB_URL=postgresql://keywords:password@127.0.0.1:5432/topaffiliate
 
 (the container runs with network_mode: host, and the site's compose publishes Postgres on 127.0.0.1:5432.)
-Give the role the least it needs: SELECT on "Program", SELECT/INSERT/UPDATE on "KeywordSignal", nothing else.
+Give the role the least it needs: SELECT on "Program", SELECT/INSERT/UPDATE/DELETE on "Keyword", nothing else.
 """
 
 import asyncio
@@ -66,7 +66,7 @@ async def fetch_uncovered(domains: list[str]) -> list[str]:
     pool = await _get_pool()
     async with pool.acquire() as con:
         rows = await con.fetch(
-            'SELECT domain FROM "KeywordSignal" WHERE domain = ANY($1::text[]) '
+            'SELECT DISTINCT domain FROM "Keyword" WHERE "isSeed" AND domain = ANY($1::text[]) '
             "AND \"fetchedAt\" >= (now() AT TIME ZONE 'utc') - make_interval(days => $2::int)",
             domains, config.KEYWORD_RECHECK_DAYS,
         )
@@ -75,12 +75,12 @@ async def fetch_uncovered(domains: list[str]) -> list[str]:
 
 
 _UPSERT = """
-    INSERT INTO "KeywordSignal"
-        (domain, keyword, "avgMonthlySearches", "threeMonthChange", "yoyChange", competition, "competitionIndex",
-         "lowBid", "highBid", "monthlyTrend", "fetchedAt", currency)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
-    ON CONFLICT (domain) DO UPDATE SET
-        keyword = EXCLUDED.keyword,
+    INSERT INTO "Keyword"
+        (domain, keyword, "isSeed", "avgMonthlySearches", "threeMonthChange", "yoyChange", competition, "competitionIndex",
+         "lowBid", "highBid", "monthlyTrend", currency, "fetchedAt")
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+    ON CONFLICT (domain, keyword) DO UPDATE SET
+        "isSeed" = EXCLUDED."isSeed",
         "avgMonthlySearches" = EXCLUDED."avgMonthlySearches",
         "threeMonthChange" = EXCLUDED."threeMonthChange",
         "yoyChange" = EXCLUDED."yoyChange",
@@ -89,50 +89,45 @@ _UPSERT = """
         "lowBid" = EXCLUDED."lowBid",
         "highBid" = EXCLUDED."highBid",
         "monthlyTrend" = EXCLUDED."monthlyTrend",
-        "fetchedAt" = EXCLUDED."fetchedAt",
-        currency = EXCLUDED.currency
+        currency = EXCLUDED.currency,
+        "fetchedAt" = EXCLUDED."fetchedAt"
 """
 
-
-_IDEA_INSERT = """
-    INSERT INTO "KeywordIdea"
-        (domain, keyword, "avgMonthlySearches", "threeMonthChange", "yoyChange", competition, "competitionIndex",
-         "lowBid", "highBid", "fetchedAt", currency)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    ON CONFLICT (domain, keyword) DO NOTHING
-"""
+# A related search that is already stored as a brand keyword keeps its row.
+_IDEA_UPSERT = _UPSERT.replace("ON CONFLICT (domain, keyword) DO UPDATE SET", "ON CONFLICT (domain, keyword) DO NOTHING -- ").split("-- ")[0]
 
 
 async def upsert_many(rows: list[list]) -> int:
     """One transaction. Row layout (what the outbox stores): [domain, keyword, is_seed, avg, 3m, yoy, competition,
-    competition_index, low_bid, high_bid, monthly_trend_json, fetched_at_iso].
-    Seed rows -> "KeywordSignal" (one per domain, the last wins). Idea rows -> "KeywordIdea": for every domain of the
-    batch the previous ideas are replaced by the new ones, the KEYWORD_IDEAS_MAX best-searched kept."""
-    seeds: dict[str, tuple] = {}
+    competition_index, low_bid, high_bid, monthly_trend_json, fetched_at_iso, currency].
+    Brand keywords (is_seed) are upserted by (domain, keyword). Related searches replace the previous ones of every domain
+    in the batch (the KEYWORD_IDEAS_MAX best-searched are kept)."""
+    seeds: dict[tuple[str, str], tuple] = {}
     ideas: dict[str, dict[str, tuple]] = {}
     for r in rows:
         at = datetime.fromisoformat(r[11]).replace(tzinfo=None)
         currency = r[12] if len(r) > 12 else None      # rows queued before the currency was kept have none
+        trend = r[10]
+        if isinstance(trend, str):
+            json.loads(trend)  # reject a malformed value here, not inside the database
+        key = r[1].strip()
+        record = (r[0], key, bool(r[2]), r[3], r[4], r[5], r[6], r[7], r[8], r[9], trend, currency, at)
         if r[2]:
-            trend = r[10]
-            if isinstance(trend, str):
-                json.loads(trend)  # reject a malformed value here, not inside the database
-            seeds[r[0]] = (r[0], r[1], r[3], r[4], r[5], r[6], r[7], r[8], r[9], trend, at, currency)
+            seeds[(r[0], key.lower())] = record
         else:
-            ideas.setdefault(r[0], {})[r[1].strip().lower()] = (r[0], r[1].strip(), r[3], r[4], r[5], r[6], r[7], r[8], r[9], at, currency)
+            ideas.setdefault(r[0], {})[key.lower()] = record
     if not seeds and not ideas:
         return 0
     idea_rows: list[tuple] = []
     for per_domain in ideas.values():
-        best = sorted(per_domain.values(), key=lambda t: -(t[2] or 0))[:config.KEYWORD_IDEAS_MAX]
-        idea_rows += best
+        idea_rows += sorted(per_domain.values(), key=lambda t: -(t[3] or 0))[:config.KEYWORD_IDEAS_MAX]
     pool = await _get_pool()
     async with pool.acquire() as con:
         async with con.transaction():
+            if ideas:
+                await con.execute('DELETE FROM "Keyword" WHERE domain = ANY($1::text[]) AND NOT "isSeed"', list(ideas))
             if seeds:
                 await con.executemany(_UPSERT, list(seeds.values()))
-            if ideas:
-                await con.execute('DELETE FROM "KeywordIdea" WHERE domain = ANY($1::text[])', list(ideas))
-                if idea_rows:
-                    await con.executemany(_IDEA_INSERT, idea_rows)
+            if idea_rows:
+                await con.executemany(_IDEA_UPSERT, idea_rows)
     return len(seeds) + len(idea_rows)

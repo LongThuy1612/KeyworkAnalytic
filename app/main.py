@@ -7,7 +7,7 @@ SQLite file (data/state.sqlite):
   * a work queue (jobs): filled from the database by the feeder in big, rare,
     cursor-paged pulls, or by POST /keywords for domains you want now;
   * an outbox: results are written locally and flushed to
-    `KeywordSignal` in one transaction every few minutes, so a the database
+    `Keyword` in one transaction every few minutes, so a the database
     outage never loses a lookup.
 
 Env:

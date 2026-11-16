@@ -16,7 +16,7 @@ Flow per keyword: type into the search box -> wait for results -> click
 Download -> wait for the file to land in the downloads dir -> parse it ->
 delete it (the operator's own "download and get data then delete the file"
 instruction -- nothing about Google Ads needs that file to persist on disk
-once its contents are in KeywordSignal).
+once its contents are in "Keyword").
 """
 
 import asyncio

@@ -9,10 +9,10 @@ CrawlData).
 POST /keywords ─┐                            ┌──▶ farm (Chrome + Keyword Planner UI)
                 ├─▶ SQLite job queue ─claim─▶┘            │
 website feeder ─┘   (pending→running→done|failed)         ▼
- Postgres "Program"                          SQLite outbox ──batch flush──▶ Postgres "KeywordSignal"
+ Postgres "Program"                          SQLite outbox ──batch flush──▶ Postgres "Keyword"
 ```
 
-The website reads "KeywordSignal" and shows the brand-search demand on the programme page (paid plans). This service no
+The website reads "Keyword" and shows the brand-search demand on the programme page (paid plans). This service no
 longer uses the crawl database.
 
 **Database access is kept to a minimum; this service's own state lives in `data/state.sqlite`:**
@@ -61,7 +61,7 @@ The profile lives in `./data/profile`, so it survives rebuilds. Copy the old
 
 ## What is stored
 
-One row per domain in "KeywordSignal": the brand keyword, average monthly searches, three-month and year-on-year change,
+One row per domain in "Keyword": the brand keyword, average monthly searches, three-month and year-on-year change,
 competition, top-of-page bid range and the 12-month trend. A domain is looked up again after `KEYWORD_RECHECK_DAYS`
 (default 30) and its row is overwritten. The table is created by the website (`npx prisma db push` there), not by this
 service. Give the service a role with the least it needs:
@@ -71,7 +71,7 @@ CREATE ROLE keywords LOGIN PASSWORD '...';
 GRANT CONNECT ON DATABASE topaffiliate TO keywords;
 GRANT USAGE ON SCHEMA public TO keywords;
 GRANT SELECT ON "Program" TO keywords;
-GRANT SELECT, INSERT, UPDATE ON "KeywordSignal" TO keywords;
+GRANT SELECT, INSERT, UPDATE, DELETE ON "Keyword" TO keywords;
 ```
 
 ## Advertiser signal

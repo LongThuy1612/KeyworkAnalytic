@@ -2,7 +2,7 @@
 and returns expired leases to the queue.
 
 The candidate query is an anti-join over affiliate_programs x
-KeywordSignal. Re-running it whenever the queue runs low (every few
+Keyword. Re-running it whenever the queue runs low (every few
 minutes, returning the same top rows each time) is what hammers the crawl DB, so:
 
   * keyset pagination: the position is stored locally (`kv`: cursor) and each

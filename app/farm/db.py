@@ -1,6 +1,6 @@
 """Keyword rows: the queue claim, the row builder, and thin wrappers over the website's database (app/sitedb.py).
 
-The table is "KeywordSignal" there: one row per domain, the SEED keyword only (isSeed is always true here, the
+The table is "Keyword" there: one row per domain, the SEED keyword only (isSeed is always true here, the
 "Keywords you provided" row). "Keyword ideas" suggestion rows are downloaded as part of the same CSV export (see
 app/farm/scrape.py's lookup_keywords()) but dropped during parsing per an explicit operator instruction (2026-08-17):
 only the seed keywords a batch was run with matter, not Google's own related-term suggestions. monthlyTrend holds the
@@ -41,13 +41,15 @@ def build_params(keyword_to_domain: dict[str, str], rows: list[dict]) -> list[li
     # Ideas are suggested for ALL the seeds of a batch together, so one is given to the programme whose brand keyword it
     # contains as a whole word (the longest brand wins). Brands shorter than 4 characters match too much to be trusted.
     brands = sorted(((k, d) for k, d in lookup.items() if len(k) >= 4), key=lambda kd: -len(kd[0]))
+    # One seed in the search: every suggestion Google returned belongs to that programme, nothing to guess.
+    only_domain = next(iter(lookup.values())) if len(set(lookup.values())) == 1 else None
     at = datetime.now().isoformat()
     out: list[list] = []
     for row in rows:
         key = row["keyword"].strip().lower()
         domain = lookup.get(key)
         if domain is None:
-            domain = next((d for b, d in brands if re.search(rf"(?<![a-z0-9]){re.escape(b)}(?![a-z0-9])", key)), None)
+            domain = only_domain or next((d for b, d in brands if re.search(rf"(?<![a-z0-9]){re.escape(b)}(?![a-z0-9])", key)), None)
         if domain is None:
             continue
         out.append(

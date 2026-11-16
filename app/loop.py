@@ -61,8 +61,10 @@ _ERROR_BREAK_MIN_MINUTES = 3
 _ERROR_BREAK_MAX_MINUTES = 8
 _BATCH_DELAY_MIN_S = 20
 _BATCH_DELAY_MAX_S = 40
-_KEYWORDS_PER_BATCH_MIN = 3
-_KEYWORDS_PER_BATCH_MAX = 5
+# One domain per Keyword Planner search by default: its brand keyword is the only seed, so every keyword Google suggests
+# belongs to that domain. (A batch of several seeds mixes their suggestions and the owner has to be guessed.)
+_KEYWORDS_PER_BATCH_MIN = config.KEYWORD_BATCH_MIN
+_KEYWORDS_PER_BATCH_MAX = config.KEYWORD_BATCH_MAX
 _DOMAINS_PER_SESSION_BATCH = 200
 # Outer safety net around lookup_keywords() (2026-08-27, root cause of a
 # multi-hour silent stall on the VPS, see scrape.py's own

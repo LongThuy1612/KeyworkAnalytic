@@ -26,6 +26,7 @@ position alone.
 import csv
 import io
 import json
+import os
 
 
 def read_export_file(path: str) -> str:
@@ -42,11 +43,10 @@ def read_export_file(path: str) -> str:
     return raw.decode("utf-8-sig")
 
 
-def parse_csv(raw_text: str, seed_keywords: list[str]) -> list[dict]:
-    """Returns one dict per SEED row only -- "Keyword ideas" suggestion rows
-    are dropped entirely (operator's explicit instruction: only the seed
-    keywords the batch was run with matter, not Google's own related-term
-    suggestions). Matches rows by exact (case-insensitive) text against
+def parse_csv(raw_text: str, seed_keywords: list[str], include_ideas: bool | None = None) -> list[dict]:
+    """Returns one dict per SEED row and, unless include_ideas is False, one per "Keyword ideas" row too (is_seed False).
+    The operator first asked for seeds only (2026-08-17) and on 2026-11-16 asked for many keywords per programme, so the
+    ideas are kept by default (KEYWORD_KEEP_IDEAS=false brings the old behaviour back). Matches seed rows by exact (case-insensitive) text against
     `seed_keywords` rather than position, since a multi-keyword batch (see
     run_keyword_farm.py's own batching) puts N seed rows under "Keywords you
     provided" followed by many more idea rows for ALL of them combined --
@@ -64,6 +64,8 @@ def parse_csv(raw_text: str, seed_keywords: list[str]) -> list[dict]:
     quoted date-range line) before handing off to csv.DictReader.
     """
     seed_set = {k.strip().lower() for k in seed_keywords}
+    if include_ideas is None:
+        include_ideas = os.getenv("KEYWORD_KEEP_IDEAS", "true").lower() == "true"
 
     lines = raw_text.splitlines()
     # First line is "Keyword Stats <timestamp>", second is a quoted date
@@ -79,7 +81,8 @@ def parse_csv(raw_text: str, seed_keywords: list[str]) -> list[dict]:
     results = []
     for row in reader:
         keyword = (row.get("Keyword") or "").strip()
-        if not keyword or keyword.lower() not in seed_set:
+        is_seed = keyword.lower() in seed_set
+        if not keyword or (not is_seed and not include_ideas):
             continue
 
         monthly_trend = {}
@@ -93,7 +96,7 @@ def parse_csv(raw_text: str, seed_keywords: list[str]) -> list[dict]:
         results.append(
             {
                 "keyword": keyword,
-                "is_seed": True,
+                "is_seed": is_seed,
                 "avg_monthly_searches": _parse_int(row.get("Avg. monthly searches")),
                 "three_month_change": (row.get("Three month change") or "").strip() or None,
                 "yoy_change": (row.get("YoY change") or "").strip() or None,

@@ -93,21 +93,44 @@ _UPSERT = """
 """
 
 
+_IDEA_INSERT = """
+    INSERT INTO "KeywordIdea"
+        (domain, keyword, "avgMonthlySearches", "threeMonthChange", "yoyChange", competition, "competitionIndex",
+         "lowBid", "highBid", "fetchedAt")
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    ON CONFLICT (domain, keyword) DO NOTHING
+"""
+
+
 async def upsert_many(rows: list[list]) -> int:
-    """All rows in one transaction (asyncpg's executemany is atomic); idempotent on the domain.
-    Row layout (what the outbox stores): [domain, keyword, is_seed, avg, 3m, yoy, competition, competition_index,
-    low_bid, high_bid, monthly_trend_json, fetched_at_iso]. Only seed rows count; a domain's last row wins."""
-    latest: dict[str, tuple] = {}
+    """One transaction. Row layout (what the outbox stores): [domain, keyword, is_seed, avg, 3m, yoy, competition,
+    competition_index, low_bid, high_bid, monthly_trend_json, fetched_at_iso].
+    Seed rows -> "KeywordSignal" (one per domain, the last wins). Idea rows -> "KeywordIdea": for every domain of the
+    batch the previous ideas are replaced by the new ones, the KEYWORD_IDEAS_MAX best-searched kept."""
+    seeds: dict[str, tuple] = {}
+    ideas: dict[str, dict[str, tuple]] = {}
     for r in rows:
-        if not r[2]:
-            continue
-        trend = r[10]
-        if isinstance(trend, str):
-            json.loads(trend)  # reject a malformed value here, not inside the database
-        latest[r[0]] = (r[0], r[1], r[3], r[4], r[5], r[6], r[7], r[8], r[9], trend, datetime.fromisoformat(r[11]).replace(tzinfo=None))
-    if not latest:
+        at = datetime.fromisoformat(r[11]).replace(tzinfo=None)
+        if r[2]:
+            trend = r[10]
+            if isinstance(trend, str):
+                json.loads(trend)  # reject a malformed value here, not inside the database
+            seeds[r[0]] = (r[0], r[1], r[3], r[4], r[5], r[6], r[7], r[8], r[9], trend, at)
+        else:
+            ideas.setdefault(r[0], {})[r[1].strip().lower()] = (r[0], r[1].strip(), r[3], r[4], r[5], r[6], r[7], r[8], r[9], at)
+    if not seeds and not ideas:
         return 0
+    idea_rows: list[tuple] = []
+    for per_domain in ideas.values():
+        best = sorted(per_domain.values(), key=lambda t: -(t[2] or 0))[:config.KEYWORD_IDEAS_MAX]
+        idea_rows += best
     pool = await _get_pool()
     async with pool.acquire() as con:
-        await con.executemany(_UPSERT, list(latest.values()))
-    return len(latest)
+        async with con.transaction():
+            if seeds:
+                await con.executemany(_UPSERT, list(seeds.values()))
+            if ideas:
+                await con.execute('DELETE FROM "KeywordIdea" WHERE domain = ANY($1::text[])', list(ideas))
+                if idea_rows:
+                    await con.executemany(_IDEA_INSERT, idea_rows)
+    return len(seeds) + len(idea_rows)

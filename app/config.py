@@ -46,3 +46,6 @@ FLUSH_BATCH = int(os.getenv("FLUSH_BATCH", 200))
 
 # A domain is looked up again after this many days (every lookup overwrites its row in "KeywordSignal").
 KEYWORD_RECHECK_DAYS = int(os.getenv("KEYWORD_RECHECK_DAYS", 30))
+
+# Related keywords kept per programme ("KeywordIdea"), best-searched first.
+KEYWORD_IDEAS_MAX = int(os.getenv("KEYWORD_IDEAS_MAX", 50))

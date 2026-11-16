@@ -7,6 +7,7 @@ only the seed keywords a batch was run with matter, not Google's own related-ter
 CSV's 12 "Searches: <Mon Year>" columns as {"2025-08": 2240000, ...}.
 """
 
+import re
 from datetime import datetime
 
 from app import jobqueue, sitedb
@@ -37,10 +38,16 @@ def build_params(keyword_to_domain: dict[str, str], rows: list[dict]) -> list[li
     element is the lookup time (ISO) so a delayed flush keeps the real
     fetched_at."""
     lookup = {k.lower(): v for k, v in keyword_to_domain.items()}
+    # Ideas are suggested for ALL the seeds of a batch together, so one is given to the programme whose brand keyword it
+    # contains as a whole word (the longest brand wins). Brands shorter than 4 characters match too much to be trusted.
+    brands = sorted(((k, d) for k, d in lookup.items() if len(k) >= 4), key=lambda kd: -len(kd[0]))
     at = datetime.now().isoformat()
     out: list[list] = []
     for row in rows:
-        domain = lookup.get(row["keyword"].strip().lower())
+        key = row["keyword"].strip().lower()
+        domain = lookup.get(key)
+        if domain is None:
+            domain = next((d for b, d in brands if re.search(rf"(?<![a-z0-9]){re.escape(b)}(?![a-z0-9])", key)), None)
         if domain is None:
             continue
         out.append(

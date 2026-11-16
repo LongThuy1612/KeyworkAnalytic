@@ -228,7 +228,7 @@ async def _run_session(state: KeywordFarmAutoState, stop_event: asyncio.Event, g
                 continue
 
             params = db.build_params(keyword_to_domain, rows) if rows else []
-            found = {p[0] for p in params}
+            found = {p[0] for p in params if p[2]}   # idea rows alone do not make a domain "looked up"
             for d in keyword_to_domain.values():
                 # A domain with no row = Keyword Planner has no data for it:
                 # closed as failed locally, re-queued only after REQUEUE_AFTER_S.
@@ -237,9 +237,10 @@ async def _run_session(state: KeywordFarmAutoState, stop_event: asyncio.Event, g
             if params:
                 store.outbox_add(params)
                 await maybe_flush()
-                looked_up += len(rows)
-                state.domainsLookedUp += len(rows)
-                for row in rows:
+                seeds = [r for r in rows if r.get("is_seed")]
+                looked_up += len(seeds)
+                state.domainsLookedUp += len(seeds)
+                for row in seeds:
                     domain = keyword_to_domain.get(row["keyword"].strip().lower())
                     logger.info(
                         "[keyword_farm_auto] %s (keyword=%r): avg_monthly_searches=%s",

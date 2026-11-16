@@ -41,15 +41,6 @@ def _db() -> sqlite3.Connection:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS ads_outbox (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                payload TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS ads_priority (
-                domain TEXT PRIMARY KEY,
-                created_at INTEGER NOT NULL
-            );
             """
         )
         _conn.commit()
@@ -98,70 +89,6 @@ def outbox_domains() -> set[str]:
     with _lock:
         rows = _db().execute("SELECT payload FROM outbox").fetchall()
     return {json.loads(r[0])[0] for r in rows}
-
-
-# ---- advertiser-signal results (app/ads): same pattern as the keyword outbox, separate table
-
-def ads_outbox_add(params_list: list[list]) -> None:
-    now = int(time.time())
-    with _lock:
-        db = _db()
-        db.executemany("INSERT INTO ads_outbox (payload, created_at) VALUES (?, ?)", [(json.dumps(p, default=str), now) for p in params_list])
-        db.commit()
-
-
-def ads_outbox_peek(limit: int = 200) -> list[tuple[int, list]]:
-    with _lock:
-        rows = _db().execute("SELECT id, payload FROM ads_outbox ORDER BY id LIMIT ?", (limit,)).fetchall()
-    return [(r[0], json.loads(r[1])) for r in rows]
-
-
-def ads_outbox_done(ids: list[int]) -> None:
-    if ids:
-        with _lock:
-            db = _db()
-            db.executemany("DELETE FROM ads_outbox WHERE id = ?", [(i,) for i in ids])
-            db.commit()
-
-
-def ads_outbox_size() -> int:
-    with _lock:
-        return _db().execute("SELECT COUNT(*) FROM ads_outbox").fetchone()[0]
-
-
-def ads_outbox_oldest_age() -> float:
-    with _lock:
-        row = _db().execute("SELECT MIN(created_at) FROM ads_outbox").fetchone()
-    return time.time() - row[0] if row and row[0] else 0.0
-
-
-def ads_outbox_domains() -> set[str]:
-    with _lock:
-        rows = _db().execute("SELECT payload FROM ads_outbox").fetchall()
-    return {json.loads(r[0])[0] for r in rows}
-
-
-def ads_prio_add(domains: list[str]) -> int:
-    now = int(time.time())
-    with _lock:
-        db = _db()
-        cur = db.executemany("INSERT OR IGNORE INTO ads_priority (domain, created_at) VALUES (?, ?)", [(d, now) for d in domains])
-        db.commit()
-        return cur.rowcount
-
-
-def ads_prio_take(limit: int) -> list[str]:
-    with _lock:
-        db = _db()
-        rows = db.execute("SELECT domain FROM ads_priority ORDER BY created_at, domain LIMIT ?", (limit,)).fetchall()
-        db.executemany("DELETE FROM ads_priority WHERE domain = ?", [(r[0],) for r in rows])
-        db.commit()
-    return [r[0] for r in rows]
-
-
-def ads_prio_size() -> int:
-    with _lock:
-        return _db().execute("SELECT COUNT(*) FROM ads_priority").fetchone()[0]
 
 
 def kv_get(key: str, default: str | None = None) -> str | None:

@@ -65,32 +65,18 @@ The profile lives in `./data/profile`, so it survives rebuilds. Copy the old
 domain looked up again later shows a trend. A domain is looked up again after `KEYWORD_RECHECK_DAYS` (default 30).
 The history write is best-effort: if its table does not exist yet, the main write still succeeds.
 
-## Advertiser signal (Google Ads Transparency Center)
+## Advertiser signal
 
-Answers one question per domain: **does anyone other than the website's own advertiser run Google ads that point to it?**
-A third party paying for traffic to a merchant (an affiliate, a partner agency, a reseller) is a good sign for a publisher
-deciding whether a programme is worth promoting.
-
-* Plain HTTP to the public RPC the Transparency Center page itself uses; no browser, no Google account, no proxy. Up to
-  `ADS_MAX_PAGES` pages of 40 creatives per domain, about 1 request/s in total (Google answers faster traffic with a redirect to google.com/sorry; the loop then pauses 10-30 min).
-* Advertisers are grouped by name (one company often has several accounts). The owner is the advertiser whose name contains the
-  domain's brand (a 3-letter brand needs a whole-word match), else the one that clearly dominates (>= 60% of the sampled
-  ads). If neither can be told, `has_other_advertisers` stays 0 rather than guessing (`owner_match = 0`).
-* Table `domain_ads_signal` (`sql/002_domain_ads_signal.sql`, apply once by hand): `has_ads`, `has_other_advertisers`,
-  `advertiser_count`, `other_advertiser_count`, `owner_match`, `sampled_ads`, estimated ad range, at most 3 other names.
-  Sample only: `has_other_advertisers = 0` means none were seen in the sampled creatives, not that none exist.
-* The loop pulls candidates from `affiliate_programs` (2000-row keyset pages), writes through its own SQLite outbox in batches
-  of 100, and pauses with a growing back-off when Google answers 429/403.
-* `POST /ads/domains {"domains": [...]}` puts domains first in line; `GET /ads/status` shows progress.
-* `python scripts/ads_backfill.py programs.json` checks an explicit list without the service.
+Moved to its own service: **GoogleAdsTransparencyCenter** (plain HTTP, no browser). The table `domain_ads_signal` it writes is unchanged.
 
 ## Only the clean dataset is looked up
 
-Keyword Planner and Transparency lookups are scarce, so the automatic feeders (which walk every crawled domain) are **off by
-default** (`FEED_AUTO=false`, `ADS_AUTO_FEED=false`). Hand in the domains worth the quota instead:
+Keyword Planner lookups are scarce. With `SITE_DB_URL` set the feeder follows the programmes published on the website (read-only
+Postgres). Without it the automatic feeder (which walks every crawled domain) is **off by default** (`FEED_AUTO=false`); hand in
+the domains worth the quota instead:
 
 ```bash
-python scripts/queue_clean.py /path/to/clean_domains.txt --keywords http://localhost:8101 --ads http://localhost:8101
+python scripts/queue_clean.py /path/to/clean_domains.txt --keywords http://localhost:8101
 ```
 
-(`/keywords` queues the Keyword Planner jobs, `/ads/domains` the advertiser checks; both accept a list and run it first.)
+(`/keywords` queues the Keyword Planner jobs and accepts a list that runs first.)

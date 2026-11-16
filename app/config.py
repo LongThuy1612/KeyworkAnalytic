@@ -19,13 +19,13 @@ JOB_MAX_ATTEMPTS = int(os.getenv("JOB_MAX_ATTEMPTS", 3))
 # (SQLite only); MySQL is queried only when a pull is due: the tool's queue is
 # under FEED_LOW_WATER AND FEED_MIN_INTERVAL_S has passed since its last pull.
 # Automatic candidate feeding from affiliate_programs (every crawled domain) is OFF by default: Keyword Planner and
-# Transparency lookups are scarce, so they run only for the domains handed in through POST /keywords and /ads/domains
-# (the clean dataset). Set FEED_AUTO=true / ADS_AUTO_FEED=true to bring the old behaviour back.
+# lookups are scarce, so they run only for the domains handed in through POST /keywords
+# (the clean dataset). Set FEED_AUTO=true to bring the old behaviour back.
 # The website's own database (PostgreSQL, read-only). When set, both lookups follow the programmes published on the
 # site -- the clean dataset -- and the automatic feeding is switched on for them (see app/sitedb.py).
 SITE_DB_URL = os.getenv("SITE_DB_URL", "").strip()
 FEED_AUTO = os.getenv("FEED_AUTO", "true" if SITE_DB_URL else "false").lower() == "true"
-ADS_AUTO_FEED = os.getenv("ADS_AUTO_FEED", "true" if SITE_DB_URL else "false").lower() == "true"
+
 FEED_LOW_WATER = int(os.getenv("FEED_LOW_WATER", 200))
 FEED_BATCH = int(os.getenv("FEED_BATCH", 1000))
 FEED_INTERVAL_S = int(os.getenv("FEED_INTERVAL_S", 30))
@@ -43,14 +43,3 @@ REQUEUE_AFTER_S = int(os.getenv("REQUEUE_AFTER_S", 1209600))
 FLUSH_MIN_ROWS = int(os.getenv("FLUSH_MIN_ROWS", 20))
 FLUSH_MAX_AGE_S = int(os.getenv("FLUSH_MAX_AGE_S", 300))
 FLUSH_BATCH = int(os.getenv("FLUSH_BATCH", 200))
-
-# --- advertiser signal (app/ads): Google Ads Transparency Center over plain HTTP ---
-ADS_ENABLED = os.getenv("ADS_ENABLED", "true").lower() == "true"
-ADS_CONCURRENCY = int(os.getenv("ADS_CONCURRENCY", 1))
-ADS_DELAY_S = float(os.getenv("ADS_DELAY_S", 1.2))          # pause between requests of one worker (Google blocks ~4 req/s)
-ADS_MAX_PAGES = int(os.getenv("ADS_MAX_PAGES", 3))          # 40 creatives per page
-ADS_RECHECK_DAYS = int(os.getenv("ADS_RECHECK_DAYS", 90))
-ADS_MIN_SCORE = int(os.getenv("ADS_MIN_SCORE", 0))          # only programmes scoring at least this (0 = all)
-ADS_PULL_BATCH = int(os.getenv("ADS_PULL_BATCH", 2000))     # candidate rows per MySQL read
-ADS_FLUSH_MIN_ROWS = int(os.getenv("ADS_FLUSH_MIN_ROWS", 100))
-ADS_FLUSH_MAX_AGE_S = int(os.getenv("ADS_FLUSH_MAX_AGE_S", 300))

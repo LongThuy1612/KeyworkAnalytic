@@ -16,7 +16,7 @@ JOB_LEASE_S = int(os.getenv("JOB_LEASE_S", 7200))
 JOB_MAX_ATTEMPTS = int(os.getenv("JOB_MAX_ATTEMPTS", 3))
 
 # Crawl-DB read budget (see app/feeder.py). The feeder tick itself is local
-# (SQLite only); MySQL is queried only when a pull is due: the tool's queue is
+# (SQLite only); the database is queried only when a pull is due: the tool's queue is
 # under FEED_LOW_WATER AND FEED_MIN_INTERVAL_S has passed since its last pull.
 # Automatic candidate feeding from affiliate_programs (every crawled domain) is OFF by default: Keyword Planner and
 # lookups are scarce, so they run only for the domains handed in through POST /keywords
@@ -34,12 +34,15 @@ FEED_EXHAUSTED_WAIT_S = int(os.getenv("FEED_EXHAUSTED_WAIT_S", 3600))
 FEED_CURSOR_RESET_S = int(os.getenv("FEED_CURSOR_RESET_S", 86400))
 FEED_RETRY_INTERVAL_S = int(os.getenv("FEED_RETRY_INTERVAL_S", 21600))
 
-# Auto-fed jobs already finished are only re-queued after this long (MySQL's
+# Auto-fed jobs already finished are only re-queued after this long (the database's
 # own retry tiers decide whether the domain is still a candidate).
 REQUEUE_AFTER_S = int(os.getenv("REQUEUE_AFTER_S", 1209600))
 
-# Outbox -> MySQL in one transaction: when FLUSH_MIN_ROWS rows are waiting or the
+# Outbox -> the database in one transaction: when FLUSH_MIN_ROWS rows are waiting or the
 # oldest has waited FLUSH_MAX_AGE_S (lookups here are sparse: ~10 rows a minute).
 FLUSH_MIN_ROWS = int(os.getenv("FLUSH_MIN_ROWS", 20))
 FLUSH_MAX_AGE_S = int(os.getenv("FLUSH_MAX_AGE_S", 300))
 FLUSH_BATCH = int(os.getenv("FLUSH_BATCH", 200))
+
+# A domain is looked up again after this many days (every lookup overwrites its row in "KeywordSignal").
+KEYWORD_RECHECK_DAYS = int(os.getenv("KEYWORD_RECHECK_DAYS", 30))

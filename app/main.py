@@ -1,17 +1,17 @@
 """KeyworkAnalytic -- Google Ads Keyword Planner search-volume farm.
 
-Standalone service split out of CrawlData. The crawl DB (MySQL) is touched as
+Standalone service split out of CrawlData. The crawl DB (the database) is touched as
 little as possible; everything the farm needs day to day lives in its own
 SQLite file (data/state.sqlite):
 
-  * a work queue (jobs): filled from MySQL by the feeder in big, rare,
+  * a work queue (jobs): filled from the database by the feeder in big, rare,
     cursor-paged pulls, or by POST /keywords for domains you want now;
   * an outbox: results are written locally and flushed to
-    `domain_keyword_volume` in one transaction every few minutes, so a MySQL
+    `KeywordSignal` in one transaction every few minutes, so a the database
     outage never loses a lookup.
 
 Env:
-  DATABASE_URL           mysql://user:pass@host:3306/db   (required)
+  SITE_DB_URL            postgresql://user:pass@127.0.0.1:5432/topaffiliate   (the website's database: programmes in, results out)
   KEYWORD_FARM_ENABLED   run the farm loop on boot (default true); false
                          leaves only the login/status endpoints up.
 """
@@ -28,10 +28,9 @@ from app import logging_setup
 
 logging_setup.install()
 
-from app import config, feeder, jobqueue, store  # noqa: E402
+from app import config, feeder, jobqueue, sitedb, store  # noqa: E402
 from app.farm import browser  # noqa: E402
 from app.loop import KeywordFarmAutoState, flush_outbox, run_keyword_farm_auto_loop  # noqa: E402
-from app.mysql import close_pool  # noqa: E402
 
 log = logging.getLogger("service")
 state = KeywordFarmAutoState()
@@ -64,7 +63,7 @@ async def _stop() -> bool:
 
 
 async def _outbox_flusher(stop: asyncio.Event) -> None:
-    """Timer flush, so rows left over after a MySQL outage (or after a session
+    """Timer flush, so rows left over after a the database outage (or after a session
     ends) land without waiting for the next lookup."""
     while not stop.is_set():
         try:
@@ -97,7 +96,7 @@ async def lifespan(_: FastAPI):
     await asyncio.gather(feed, flusher, return_exceptions=True)
     await flush_outbox()
     await browser.close_context()
-    await close_pool()
+    await sitedb.close_pool()
 
 
 app = FastAPI(title="KeyworkAnalytic", version="1.0.0", lifespan=lifespan)

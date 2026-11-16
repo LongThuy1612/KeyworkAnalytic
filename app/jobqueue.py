@@ -5,7 +5,7 @@ One row per (domain, tool). Single tool here (`keyword`); the table shape is sha
 `ext` (browser extension) and `pro` (logged-in Pro accounts). Jobs come from two producers:
 
   api   POST /analyze (explicit list of domains, can jump the queue)
-  auto  the feeder, topping up from MySQL candidates
+  auto  the feeder, topping up from the database candidates
 
 The farm loops never see this table directly: their `db.get_next_domains()`
 is a thin wrapper over claim(), and traffic_db.save_success()/save_miss()

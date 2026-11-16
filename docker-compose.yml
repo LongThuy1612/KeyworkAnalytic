@@ -1,5 +1,4 @@
-# network_mode: host -> `localhost` MySQL in DATABASE_URL keeps working with the
-# existing grants, and the host's own Xvfb (:99, owned by pm2 gui-display) is
+# network_mode: host -> `127.0.0.1` in SITE_DB_URL (the website's Postgres) works, and the host's own Xvfb (:99, owned by pm2 gui-display) is
 # not touched because this container runs its own display (:101).
 services:
   keyword:

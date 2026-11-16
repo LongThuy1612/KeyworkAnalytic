@@ -42,7 +42,7 @@ _BREAK_MIN_MINUTES = 90
 _BREAK_MAX_MINUTES = 180
 
 # Confirmed live 2026-08-29 (see CLAUDE.md's session notes): a session that
-# raises (MySQL hiccup, network blip, browser crash) used to fall through to
+# raises (the database hiccup, network blip, browser crash) used to fall through to
 # the same 90-180min break as a normal completed session -- appropriate for
 # throttling real UI activity, but wasteful when the session did little or
 # no real Keyword Planner interaction before failing. A short break here
@@ -107,8 +107,8 @@ class KeywordFarmAutoState:
 
 
 async def flush_outbox() -> int:
-    """Drains the outbox into MySQL in ONE transaction per call (up to
-    FLUSH_BATCH rows). Never raises -- on failure (almost always MySQL being
+    """Drains the outbox into the database in ONE transaction per call (up to
+    FLUSH_BATCH rows). Never raises -- on failure (almost always the database being
     unreachable) the rows stay queued locally and the next flush retries."""
     batch = store.outbox_peek(config.FLUSH_BATCH)
     if not batch:

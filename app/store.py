@@ -4,9 +4,9 @@ This file is the service's own storage, so the crawl DB is read and written as
 little as possible:
 
   jobs    the work queue (see app/jobqueue.py) -- what is pending / running /
-          done / failed is answered here, never by asking MySQL.
-  outbox  results waiting to be written to MySQL in one batch. The farm never
-          blocks on, or loses a lookup to, a MySQL hiccup.
+          done / failed is answered here, never by asking the database.
+  outbox  results waiting to be written to the database in one batch. The farm never
+          blocks on, or loses a lookup to, a the database hiccup.
   kv      small state: the feeder's keyset cursor and pull timers.
 """
 

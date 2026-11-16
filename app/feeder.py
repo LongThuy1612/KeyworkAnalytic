@@ -1,8 +1,8 @@
-"""Tops the SQLite queue up from MySQL -- as rarely and as cheaply as possible --
+"""Tops the SQLite queue up from the website's Postgres -- as rarely and as cheaply as possible --
 and returns expired leases to the queue.
 
 The candidate query is an anti-join over affiliate_programs x
-domain_keyword_volume. Re-running it whenever the queue runs low (every few
+KeywordSignal. Re-running it whenever the queue runs low (every few
 minutes, returning the same top rows each time) is what hammers the crawl DB, so:
 
   * keyset pagination: the position is stored locally (`kv`: cursor) and each
@@ -12,7 +12,7 @@ minutes, returning the same top rows each time) is what hammers the crawl DB, so
   * backlog exhausted -> wait FEED_EXHAUSTED_WAIT_S; restart from the head once
     a day (FEED_CURSOR_RESET_S) to pick up newly crawled domains.
 
-What is pending / running / done is answered by SQLite, never by MySQL.
+What is pending / running / done is answered by SQLite, never by the database.
 """
 
 import asyncio
@@ -32,7 +32,7 @@ def _kv_float(key: str) -> float:
 
 async def pull_once_site(now: float) -> int:
     """The programmes published on the website, page by page (alphabetical keyset cursor kept in SQLite). One cheap
-    IN query against MySQL drops those that were looked up recently; nothing else touches the crawl DB."""
+    query drops those that were looked up recently; nothing else touches the crawl DB."""
     cursor = store.kv_get("site_cursor")
     page = await sitedb.fetch_domains(config.FEED_BATCH, cursor)
     skip = store.outbox_domains()
@@ -50,23 +50,8 @@ async def pull_once_site(now: float) -> int:
 async def pull_once(now: float) -> int:
     if sitedb.enabled():
         return await pull_once_site(now)
-    cursor = store.kv_get("cursor")
-    if cursor and now - _kv_float("cursor_at") > config.FEED_CURSOR_RESET_S:
-        cursor = None  # restart from the head
-    rows = await db.fetch_fresh(config.FEED_BATCH, cursor)
-    skip = store.outbox_domains()
-    domains = [d for d, _ in rows if d not in skip]
-    added = jobqueue.enqueue(domains, [TOOL], source="auto") if domains else 0
-
-    if len(rows) < config.FEED_BATCH:
-        store.kv_set("cursor", None)
-        store.kv_set("next_pull", str(now + config.FEED_EXHAUSTED_WAIT_S))
-    else:
-        if not cursor:
-            store.kv_set("cursor_at", str(now))
-        store.kv_set("cursor", rows[-1][1])
-        store.kv_set("next_pull", str(now + config.FEED_MIN_INTERVAL_S))
-    return added
+    store.kv_set("next_pull", str(now + config.FEED_EXHAUSTED_WAIT_S))  # no website database: only POST /keywords
+    return 0
 
 
 async def run_forever(stop: asyncio.Event) -> None:
@@ -78,8 +63,8 @@ async def run_forever(stop: asyncio.Event) -> None:
             now = time.time()
             if config.FEED_AUTO and jobqueue.pending_count(TOOL) < config.FEED_LOW_WATER and now >= _kv_float("next_pull"):
                 added = await pull_once(now)
-                log.info("pulled a page of %s domains, %d new job(s) queued", "site" if sitedb.enabled() else "MySQL", added)
-        except Exception as err:  # noqa: BLE001 -- MySQL hiccup: retried next tick (next_pull not advanced)
+                log.info("pulled a page of %s domains, %d new job(s) queued", "site" if sitedb.enabled() else "no", added)
+        except Exception as err:  # noqa: BLE001 -- the database hiccup: retried next tick (next_pull not advanced)
             log.warning("feeder tick failed: %s", err)
         try:
             await asyncio.wait_for(stop.wait(), timeout=config.FEED_INTERVAL_S)

@@ -8,27 +8,28 @@ CrawlData).
 ```
 POST /keywords ─┐                            ┌──▶ farm (Chrome + Keyword Planner UI)
                 ├─▶ SQLite job queue ─claim─▶┘            │
-MySQL feeder ───┘   (pending→running→done|failed)         ▼
- affiliate_programs                          SQLite outbox ──batch flush──▶ MySQL domain_keyword_volume
+website feeder ─┘   (pending→running→done|failed)         ▼
+ Postgres "Program"                          SQLite outbox ──batch flush──▶ Postgres "KeywordSignal"
 ```
 
-**Crawl-DB access is kept to a minimum; this service's own state lives in
-`data/state.sqlite`:**
+The website reads "KeywordSignal" and shows the brand-search demand on the programme page (paid plans). This service no
+longer uses the crawl database.
 
-| what | where it lives | MySQL traffic |
+**Database access is kept to a minimum; this service's own state lives in `data/state.sqlite`:**
+
+| what | where it lives | database traffic |
 |---|---|---|
 | work queue (pending / running / done / failed, leases, priority) | SQLite `jobs` | none |
 | which domains are done or have no Keyword Planner data | SQLite `jobs` (re-queued after 14 days) | none |
-| candidate discovery | feeder: keyset-paged (`crawled_at` cursor kept in SQLite `kv`), 1000-row pages, ≤ 1 pull / 10 min and only while < 200 jobs are pending; backlog exhausted → looks again after 1 h | one anti-join page per pull |
-| results | SQLite `outbox` → one multi-row `INSERT … ON DUPLICATE KEY UPDATE` in one transaction when 20 rows are waiting or the oldest is 5 min old | ~ one write per few minutes |
+| candidate discovery | feeder: keyset-paged over the site's programmes (domain cursor kept in SQLite `kv`), 1000-row pages, ≤ 1 pull / 10 min and only while < 200 jobs are pending; end of the list → looks again after 1 h | one query per page, plus one to drop domains looked up within `KEYWORD_RECHECK_DAYS` |
+| results | SQLite `outbox` → one multi-row upsert in one transaction when 20 rows are waiting or the oldest is 5 min old | ~ one write per few minutes |
 
-A MySQL outage therefore only delays writes; nothing is lost, and the farm keeps
-working from its local queue.
+A database outage therefore only delays writes; nothing is lost, and the farm keeps working from its local queue.
 
 ## Run
 
 ```bash
-cp .env.example .env        # set DATABASE_URL
+cp .env.example .env        # set SITE_DB_URL
 docker compose up -d --build
 docker compose logs -f keyword
 ```
@@ -53,27 +54,34 @@ The profile lives in `./data/profile`, so it survives rebuilds. Copy the old
 
 ## Notes
 
-* `network_mode: host` keeps `localhost` MySQL and its grants working; the
+* `network_mode: host` lets `127.0.0.1` reach the website's Postgres; the
   container uses its own X display `:101` so it never touches the host's `:99`.
 * Do not run this and CrawlData's built-in keyword farm
   (`enableKeywordFarm`) against the same profile at the same time.
 
-## Keyword history
+## What is stored
 
-`domain_keyword_volume` keeps the latest numbers per domain. Every lookup also appends one row to
-`domain_keyword_volume_history` (`sql/001_domain_keyword_volume_history.sql`), unique on (domain, keyword, fetched_at), so a
-domain looked up again later shows a trend. A domain is looked up again after `KEYWORD_RECHECK_DAYS` (default 30).
-The history write is best-effort: if its table does not exist yet, the main write still succeeds.
+One row per domain in "KeywordSignal": the brand keyword, average monthly searches, three-month and year-on-year change,
+competition, top-of-page bid range and the 12-month trend. A domain is looked up again after `KEYWORD_RECHECK_DAYS`
+(default 30) and its row is overwritten. The table is created by the website (`npx prisma db push` there), not by this
+service. Give the service a role with the least it needs:
+
+```sql
+CREATE ROLE keywords LOGIN PASSWORD '...';
+GRANT CONNECT ON DATABASE topaffiliate TO keywords;
+GRANT USAGE ON SCHEMA public TO keywords;
+GRANT SELECT ON "Program" TO keywords;
+GRANT SELECT, INSERT, UPDATE ON "KeywordSignal" TO keywords;
+```
 
 ## Advertiser signal
 
-Moved to its own service: **GoogleAdsTransparencyCenter** (plain HTTP, no browser). The table `domain_ads_signal` it writes is unchanged.
+Moved to its own service: **GoogleAdsTransparencyCenter** (plain HTTP, no browser). It writes "AdsSignal" in the same Postgres.
 
 ## Only the clean dataset is looked up
 
-Keyword Planner lookups are scarce. With `SITE_DB_URL` set the feeder follows the programmes published on the website (read-only
-Postgres). Without it the automatic feeder (which walks every crawled domain) is **off by default** (`FEED_AUTO=false`); hand in
-the domains worth the quota instead:
+Keyword Planner lookups are scarce. With `SITE_DB_URL` set the feeder follows the programmes published on the website. Without
+it nothing is fed automatically (`FEED_AUTO=false`); hand in the domains worth the quota instead:
 
 ```bash
 python scripts/queue_clean.py /path/to/clean_domains.txt --keywords http://localhost:8101

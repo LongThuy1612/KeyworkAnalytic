@@ -97,6 +97,7 @@ def parse_csv(raw_text: str, seed_keywords: list[str], include_ideas: bool | Non
             {
                 "keyword": keyword,
                 "is_seed": is_seed,
+                "currency": (row.get("Currency") or "").strip().upper() or None,   # the Google Ads account's currency (bids)
                 "avg_monthly_searches": _parse_int(row.get("Avg. monthly searches")),
                 "three_month_change": (row.get("Three month change") or "").strip() or None,
                 "yoy_change": (row.get("YoY change") or "").strip() or None,

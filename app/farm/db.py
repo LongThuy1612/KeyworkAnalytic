@@ -64,6 +64,7 @@ def build_params(keyword_to_domain: dict[str, str], rows: list[dict]) -> list[li
                 row["high_top_of_page_bid"],
                 row["monthly_trend_json"],
                 at,
+                row.get("currency"),
             ]
         )
     return out

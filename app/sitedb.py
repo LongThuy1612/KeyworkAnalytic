@@ -77,8 +77,8 @@ async def fetch_uncovered(domains: list[str]) -> list[str]:
 _UPSERT = """
     INSERT INTO "KeywordSignal"
         (domain, keyword, "avgMonthlySearches", "threeMonthChange", "yoyChange", competition, "competitionIndex",
-         "lowBid", "highBid", "monthlyTrend", "fetchedAt")
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+         "lowBid", "highBid", "monthlyTrend", "fetchedAt", currency)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
     ON CONFLICT (domain) DO UPDATE SET
         keyword = EXCLUDED.keyword,
         "avgMonthlySearches" = EXCLUDED."avgMonthlySearches",
@@ -89,15 +89,16 @@ _UPSERT = """
         "lowBid" = EXCLUDED."lowBid",
         "highBid" = EXCLUDED."highBid",
         "monthlyTrend" = EXCLUDED."monthlyTrend",
-        "fetchedAt" = EXCLUDED."fetchedAt"
+        "fetchedAt" = EXCLUDED."fetchedAt",
+        currency = EXCLUDED.currency
 """
 
 
 _IDEA_INSERT = """
     INSERT INTO "KeywordIdea"
         (domain, keyword, "avgMonthlySearches", "threeMonthChange", "yoyChange", competition, "competitionIndex",
-         "lowBid", "highBid", "fetchedAt")
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         "lowBid", "highBid", "fetchedAt", currency)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     ON CONFLICT (domain, keyword) DO NOTHING
 """
 
@@ -111,13 +112,14 @@ async def upsert_many(rows: list[list]) -> int:
     ideas: dict[str, dict[str, tuple]] = {}
     for r in rows:
         at = datetime.fromisoformat(r[11]).replace(tzinfo=None)
+        currency = r[12] if len(r) > 12 else None      # rows queued before the currency was kept have none
         if r[2]:
             trend = r[10]
             if isinstance(trend, str):
                 json.loads(trend)  # reject a malformed value here, not inside the database
-            seeds[r[0]] = (r[0], r[1], r[3], r[4], r[5], r[6], r[7], r[8], r[9], trend, at)
+            seeds[r[0]] = (r[0], r[1], r[3], r[4], r[5], r[6], r[7], r[8], r[9], trend, at, currency)
         else:
-            ideas.setdefault(r[0], {})[r[1].strip().lower()] = (r[0], r[1].strip(), r[3], r[4], r[5], r[6], r[7], r[8], r[9], at)
+            ideas.setdefault(r[0], {})[r[1].strip().lower()] = (r[0], r[1].strip(), r[3], r[4], r[5], r[6], r[7], r[8], r[9], at, currency)
     if not seeds and not ideas:
         return 0
     idea_rows: list[tuple] = []
